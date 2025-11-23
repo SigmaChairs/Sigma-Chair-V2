@@ -1,41 +1,42 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager") -- WICHTIG für echte Klicks
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 -- === EINSTELLUNGEN ===
-local LOCK_KEY = Enum.UserInputType.MouseButton2 -- Taste für Aimlock (Rechtsklick)
-local AIM_PART = "Head" -- Worauf gezielt wird
-local FOV_LIMIT = 400 -- Radius um die Maus (in Pixeln)
-local USE_TEAM_CHECK = false -- True = Teammitglieder ignorieren
+local LOCK_KEY = Enum.UserInputType.MouseButton2 -- Aimlock Taste
+local AIM_PART = "Head" 
+local FOV_LIMIT = 400 
+local FIRE_RATE = 0.1 -- Wie schnell geklickt wird (nicht zu schnell, sonst verschluckt sich die Waffe)
+local USE_TEAM_CHECK = false 
+local TRIGGER_ENABLED = true 
 
 -- Variablen
 local isLocked = false
 local currentTarget = nil
+local lastShotTime = 0
 
 -----------------------------------------------------------------------
--- TEIL 1: HIGHLIGHTS & NAMETAGS (Visuals)
+-- TEIL 1: HIGHLIGHTS & NAMETAGS (Blau)
 -----------------------------------------------------------------------
 local function createVisuals(targetChar, playerObj)
 	if targetChar == player.Character then return end
 	
-	-- 1. Highlight (Blaues Leuchten)
+	-- 1. Highlight
 	if not targetChar:FindFirstChild("GlowEffect") then
 		local highlight = Instance.new("Highlight")
 		highlight.Name = "GlowEffect"
 		highlight.Adornee = targetChar
-		
-		highlight.FillColor = Color3.fromRGB(0, 85, 255) -- Kräftiges Blau
-		highlight.OutlineColor = Color3.fromRGB(255, 255, 255) -- Weißer Rand
-		
+		highlight.FillColor = Color3.fromRGB(0, 85, 255) -- Blau
+		highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
 		highlight.FillTransparency = 0.5
-		highlight.OutlineTransparency = 0
 		highlight.Parent = targetChar
 	end
 
-	-- 2. Nametag (Blauer Text über dem Kopf)
+	-- 2. Nametag
 	local head = targetChar:FindFirstChild("Head")
 	if head and not targetChar:FindFirstChild("ESP_Nametag") then
 		local bb = Instance.new("BillboardGui")
@@ -50,7 +51,6 @@ local function createVisuals(targetChar, playerObj)
 		txt.BackgroundTransparency = 1
 		txt.Size = UDim2.new(1, 0, 1, 0)
 		txt.TextStrokeTransparency = 0 
-		
 		txt.TextColor3 = Color3.fromRGB(0, 170, 255) -- Hellblau
 		txt.TextSize = 14
 		txt.Font = Enum.Font.SourceSansBold
@@ -71,26 +71,83 @@ end
 
 local function setupPlayer(otherPlayer)
 	if otherPlayer == player then return end
-	
 	otherPlayer.CharacterAdded:Connect(function(char)
 		task.wait(0.5)
 		createVisuals(char, otherPlayer)
 	end)
-	
-	if otherPlayer.Character then 
-		createVisuals(otherPlayer.Character, otherPlayer) 
-	end
+	if otherPlayer.Character then createVisuals(otherPlayer.Character, otherPlayer) end
 end
 
 for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
 Players.PlayerAdded:Connect(setupPlayer)
 
 -----------------------------------------------------------------------
--- TEIL 2: AIM LOCK LOGIK (Mouse Closest)
+-- TEIL 2: ECHTER MAUSKLICK (VirtualInputManager)
+-----------------------------------------------------------------------
+local function performClick()
+	if tick() - lastShotTime < FIRE_RATE then return end
+	lastShotTime = tick()
+	
+	-- Prüfen ob Tool ausgerüstet ist
+	local char = player.Character
+	if char and char:FindFirstChildWhichIsA("Tool") then
+		
+		local x, y = 0, 0 -- Koordinaten sind egal bei Button1
+		
+		-- 1. Maustaste DRÜCKEN
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
+		
+		-- 2. Ganz kurz warten (Wichtig für manche Waffen)
+		task.wait(0.05)
+		
+		-- 3. Maustaste LOSLASSEN
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+		
+		-- Das sorgt dafür, dass die Waffe im Spiel wirklich feuert
+	end
+end
+
+-----------------------------------------------------------------------
+-- TEIL 3: TRIGGERBOT LOGIK
+-----------------------------------------------------------------------
+local function checkTriggerBot()
+	if not TRIGGER_ENABLED then return end
+	
+	local mouseLocation = UserInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
+	
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {player.Character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	
+	local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+	
+	if result and result.Instance then
+		local hitPart = result.Instance
+		
+		-- Teil gehört zu einem Charakter?
+		local character = hitPart.Parent
+		if character:IsA("Accessory") then character = character.Parent end 
+		
+		local humanoid = character:FindFirstChild("Humanoid")
+		
+		if humanoid and humanoid.Health > 0 then
+			local enemyPlayer = Players:GetPlayerFromCharacter(character)
+			
+			if USE_TEAM_CHECK and enemyPlayer and enemyPlayer.Team == player.Team then return end
+			
+			-- Echter Klick ausführen
+			performClick()
+		end
+	end
+end
+
+-----------------------------------------------------------------------
+-- TEIL 4: AIM LOCK (Mouse Closest)
 -----------------------------------------------------------------------
 local function getTargetUnderMouse()
 	local closestTarget = nil
-	local shortestDistance = FOV_LIMIT -- Nur Ziele innerhalb dieses Radius
+	local shortestDistance = FOV_LIMIT
 	local mousePos = UserInputService:GetMouseLocation()
 
 	for _, otherPlayer in ipairs(Players:GetPlayers()) do
@@ -102,14 +159,10 @@ local function getTargetUnderMouse()
 			if humanoid and humanoid.Health > 0 and targetPartObj then
 				if USE_TEAM_CHECK and otherPlayer.Team == player.Team then continue end
 
-				-- 1. Ist der Spieler auf dem Bildschirm sichtbar?
 				local screenPos, onScreen = camera:WorldToViewportPoint(targetPartObj.Position)
 
 				if onScreen then
-					-- 2. Abstand von der Maus zum Kopf berechnen (2D)
 					local distToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-
-					-- 3. Den wählen, der am nächsten an der Maus ist
 					if distToMouse < shortestDistance then
 						closestTarget = targetPartObj
 						shortestDistance = distToMouse
@@ -121,7 +174,6 @@ local function getTargetUnderMouse()
 	return closestTarget
 end
 
--- Aimlock Inputs
 UserInputService.InputBegan:Connect(function(input, gp)
 	if gp then return end
 	if input.UserInputType == LOCK_KEY then
@@ -141,11 +193,9 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 
 -----------------------------------------------------------------------
--- TEIL 3: INFINITE JUMP (Unendlich Springen)
+-- TEIL 5: INFINITE JUMP
 -----------------------------------------------------------------------
 UserInputService.JumpRequest:Connect(function()
-	-- Wenn der Spieler springen will (Leertaste), erzwingen wir den Sprung
-	-- auch wenn er in der Luft ist.
 	if player.Character and player.Character:FindFirstChild("Humanoid") then
 		player.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
 	end
@@ -155,7 +205,7 @@ end)
 -- MAIN LOOP
 -----------------------------------------------------------------------
 RunService.RenderStepped:Connect(function()
-	-- Bewegt die Kamera auf das Ziel
+	-- 1. Aimlock
 	if isLocked and currentTarget and currentTarget.Parent then
 		local humanoid = currentTarget.Parent:FindFirstChild("Humanoid")
 		if humanoid and humanoid.Health > 0 then
@@ -165,4 +215,7 @@ RunService.RenderStepped:Connect(function()
 			currentTarget = nil
 		end
 	end
+	
+	-- 2. Triggerbot
+	checkTriggerBot()
 end)
