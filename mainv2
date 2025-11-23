@@ -7,11 +7,11 @@ local camera = workspace.CurrentCamera
 
 -- === EINSTELLUNGEN ===
 local LOCK_KEY = Enum.UserInputType.MouseButton2 -- Taste für Aimlock
-local AIM_PART = "Head" -- Worauf gezielt wird
-local MAX_DISTANCE = 500 
+local AIM_PART = "Head" 
+local FOV_LIMIT = 400 -- Wie weit darf der Gegner vom Mauszeiger weg sein, um gelockt zu werden? (Pixel)
 local USE_TEAM_CHECK = false
-local FIRE_RATE = 0.1 -- Wie schnell der Triggerbot schießt (0.1s)
-local TRIGGER_ENABLED = true -- Triggerbot an/aus
+local FIRE_RATE = 0.1
+local TRIGGER_ENABLED = true 
 
 -- Variablen
 local isLocked = false
@@ -19,36 +19,75 @@ local currentTarget = nil
 local lastShotTime = 0
 
 -----------------------------------------------------------------------
--- TEIL 1: HIGHLIGHTS
+-- TEIL 1: HIGHLIGHTS & NAMETAGS (Visuals)
 -----------------------------------------------------------------------
-local function createHighlight(targetChar)
+local function createVisuals(targetChar, playerObj)
 	if targetChar == player.Character then return end
-	if targetChar:FindFirstChild("GlowEffect") then return end
+	
+	-- 1. Highlight
+	if not targetChar:FindFirstChild("GlowEffect") then
+		local highlight = Instance.new("Highlight")
+		highlight.Name = "GlowEffect"
+		highlight.Adornee = targetChar
+		highlight.FillColor = Color3.fromRGB(255, 0, 0)
+		highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+		highlight.FillTransparency = 0.6
+		highlight.OutlineTransparency = 0.1
+		highlight.Parent = targetChar
+	end
 
-	local highlight = Instance.new("Highlight")
-	highlight.Name = "GlowEffect"
-	highlight.Adornee = targetChar
-	highlight.FillColor = Color3.fromRGB(255, 0, 0)
-	highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-	highlight.FillTransparency = 0.6
-	highlight.OutlineTransparency = 0.1
-	highlight.Parent = targetChar
+	-- 2. Nametag
+	local head = targetChar:FindFirstChild("Head")
+	if head and not targetChar:FindFirstChild("ESP_Nametag") then
+		local bb = Instance.new("BillboardGui")
+		bb.Name = "ESP_Nametag"
+		bb.Adornee = head
+		bb.Size = UDim2.new(0, 200, 0, 50)
+		bb.StudsOffset = Vector3.new(0, 3, 0)
+		bb.AlwaysOnTop = true
+
+		local txt = Instance.new("TextLabel")
+		txt.Parent = bb
+		txt.BackgroundTransparency = 1
+		txt.Size = UDim2.new(1, 0, 1, 0)
+		txt.TextStrokeTransparency = 0
+		txt.TextColor3 = Color3.fromRGB(255, 255, 255)
+		txt.TextSize = 14
+		txt.Font = Enum.Font.SourceSansBold
+		
+		local humanoid = targetChar:FindFirstChild("Humanoid")
+		local function updateText()
+			if humanoid then
+				local hp = math.floor(humanoid.Health)
+				txt.Text = playerObj.Name .. " [" .. hp .. "%]"
+				if hp > 50 then
+					txt.TextColor3 = Color3.fromRGB(0, 255, 0)
+				else
+					txt.TextColor3 = Color3.fromRGB(255, 0, 0)
+				end
+			end
+		end
+		
+		updateText()
+		if humanoid then humanoid.HealthChanged:Connect(updateText) end
+		bb.Parent = targetChar
+	end
 end
 
 local function setupPlayer(otherPlayer)
 	if otherPlayer == player then return end
 	otherPlayer.CharacterAdded:Connect(function(char)
 		task.wait(0.5)
-		createHighlight(char)
+		createVisuals(char, otherPlayer)
 	end)
-	if otherPlayer.Character then createHighlight(otherPlayer.Character) end
+	if otherPlayer.Character then createVisuals(otherPlayer.Character, otherPlayer) end
 end
 
 for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
 Players.PlayerAdded:Connect(setupPlayer)
 
 -----------------------------------------------------------------------
--- TEIL 2: WAFFEN LOGIK (Schießen)
+-- TEIL 2: WAFFEN LOGIK
 -----------------------------------------------------------------------
 local function fireWeapon(targetPos)
 	if tick() - lastShotTime < FIRE_RATE then return end
@@ -58,33 +97,29 @@ local function fireWeapon(targetPos)
 	local tool = char and char:FindFirstChildWhichIsA("Tool")
 	
 	if tool then
-		-- Startpunkt (Handle oder Kopf)
 		local origin = (tool:FindFirstChild("Handle") and tool.Handle.Position) or char.Head.Position
 		
-		-- Laserstrahl erstellen
 		local beam = Instance.new("Part")
 		beam.Anchored = true
 		beam.CanCollide = false
 		beam.Material = Enum.Material.Neon
-		beam.Color = Color3.fromRGB(255, 255, 0) -- Gelb
+		beam.Color = Color3.fromRGB(255, 255, 0)
 		beam.Size = Vector3.new(0.1, 0.1, (targetPos - origin).Magnitude)
 		beam.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -beam.Size.Z/2)
 		beam.Parent = workspace
 		game:GetService("Debris"):AddItem(beam, 0.05)
 		
-		-- HIER: RemoteEvent für Schaden feuern
+		-- print("TRIGGERBOT: Treffer!")
 		-- tool.RemoteEvent:FireServer(targetPos)
-		print("TRIGGERBOT: Treffer!")
 	end
 end
 
 -----------------------------------------------------------------------
--- TEIL 3: TRIGGERBOT LOGIK (Maus-Erkennung)
+-- TEIL 3: TRIGGERBOT LOGIK
 -----------------------------------------------------------------------
 local function checkTriggerBot()
 	if not TRIGGER_ENABLED then return end
 	
-	-- Raycast von der Kamera durch die Mausposition
 	local mouseLocation = UserInputService:GetMouseLocation()
 	local ray = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
 	
@@ -92,38 +127,29 @@ local function checkTriggerBot()
 	params.FilterDescendantsInstances = {player.Character}
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	
-	local result = workspace:Raycast(ray.Origin, ray.Direction * MAX_DISTANCE, params)
+	local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
 	
 	if result and result.Instance then
 		local hitPart = result.Instance
-		
-		-- Ist es ein Kopf?
-		if hitPart.Name == "Head" and hitPart.Parent:FindFirstChild("Humanoid") then
+		if hitPart.Parent:FindFirstChild("Humanoid") then
 			local enemyPlayer = Players:GetPlayerFromCharacter(hitPart.Parent)
 			local hum = hitPart.Parent.Humanoid
 			
 			if hum.Health > 0 then
-				-- Team Check
-				if USE_TEAM_CHECK and enemyPlayer and enemyPlayer.Team == player.Team then
-					return -- Nicht schießen
-				end
-				
-				-- FEUER!
-				fireWeapon(hitPart.Position)
+				if USE_TEAM_CHECK and enemyPlayer and enemyPlayer.Team == player.Team then return end
+				fireWeapon(result.Position)
 			end
 		end
 	end
 end
 
 -----------------------------------------------------------------------
--- TEIL 4: AIM LOCK MECHANIK
+-- TEIL 4: AIM LOCK LOGIK (MOUSE CLOSEST)
 -----------------------------------------------------------------------
-local function getClosestTarget()
+local function getTargetUnderMouse()
 	local closestTarget = nil
-	local shortestDist = MAX_DISTANCE
-	local myPos = player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character.HumanoidRootPart.Position
-
-	if not myPos then return nil end
+	local shortestDistance = FOV_LIMIT -- Nur Ziele innerhalb dieses Radius
+	local mousePos = UserInputService:GetMouseLocation()
 
 	for _, otherPlayer in ipairs(Players:GetPlayers()) do
 		if otherPlayer ~= player and otherPlayer.Character then
@@ -134,10 +160,18 @@ local function getClosestTarget()
 			if humanoid and humanoid.Health > 0 and targetPartObj then
 				if USE_TEAM_CHECK and otherPlayer.Team == player.Team then continue end
 
-				local dist = (targetPartObj.Position - myPos).Magnitude
-				if dist < shortestDist then
-					closestTarget = targetPartObj
-					shortestDist = dist
+				-- 1. Prüfen: Ist der Spieler überhaupt auf dem Bildschirm?
+				local screenPos, onScreen = camera:WorldToViewportPoint(targetPartObj.Position)
+
+				if onScreen then
+					-- 2. Distanz vom Mauszeiger zum Kopf berechnen (in 2D Pixeln)
+					local distToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+
+					-- 3. Wenn dieser Spieler näher an der Maus ist als der vorherige -> Neuer Favorit
+					if distToMouse < shortestDistance then
+						closestTarget = targetPartObj
+						shortestDistance = distToMouse
+					end
 				end
 			end
 		end
@@ -148,7 +182,8 @@ end
 UserInputService.InputBegan:Connect(function(input, gp)
 	if gp then return end
 	if input.UserInputType == LOCK_KEY then
-		local found = getClosestTarget()
+		-- Hier rufen wir jetzt die neue Funktion auf
+		local found = getTargetUnderMouse()
 		if found then
 			currentTarget = found
 			isLocked = true
@@ -167,7 +202,7 @@ end)
 -- MAIN LOOP
 -----------------------------------------------------------------------
 RunService.RenderStepped:Connect(function()
-	-- 1. Aimlock (Kamera bewegen)
+	-- 1. Aimlock
 	if isLocked and currentTarget and currentTarget.Parent then
 		local humanoid = currentTarget.Parent:FindFirstChild("Humanoid")
 		if humanoid and humanoid.Health > 0 then
@@ -178,7 +213,6 @@ RunService.RenderStepped:Connect(function()
 		end
 	end
 	
-	-- 2. Triggerbot (Prüfen ob Maus auf Kopf ist)
-	-- Läuft immer, auch wenn Aimlock aus ist!
+	-- 2. Triggerbot
 	checkTriggerBot()
 end)
