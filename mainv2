@@ -1,18 +1,33 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local VirtualInputManager = game:GetService("VirtualInputManager") -- WICHTIG für echte Klicks
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local CoreGui = game:GetService("CoreGui")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- === EINSTELLUNGEN ===
-local LOCK_KEY = Enum.UserInputType.MouseButton2 -- Aimlock Taste
-local AIM_PART = "Head" 
-local FOV_LIMIT = 400 
-local FIRE_RATE = 0.1 -- Wie schnell geklickt wird (nicht zu schnell, sonst verschluckt sich die Waffe)
-local USE_TEAM_CHECK = false 
-local TRIGGER_ENABLED = true 
+-- === SETTINGS ===
+local Settings = {
+	-- Aim
+	AimLock = true,
+	TriggerBot = true,
+	
+	-- Visuals
+	Visuals = true,
+	
+	-- Player
+	InfJump = true,
+	FieldOfView = 90, -- Standard FOV
+	
+	-- Config
+	AimPart = "Head",
+	FOV = 400, -- Aimlock Radius
+	FireRate = 0.1,
+	LockKey = Enum.UserInputType.MouseButton2,
+	TeamCheck = false,
+	ThemeColor = Color3.fromRGB(0, 170, 255) -- Hellblau
+}
 
 -- Variablen
 local isLocked = false
@@ -20,23 +35,290 @@ local currentTarget = nil
 local lastShotTime = 0
 
 -----------------------------------------------------------------------
--- TEIL 1: HIGHLIGHTS & NAMETAGS (Blau)
+-- 1. GUI ERSTELLUNG (Sigma Chair V2)
 -----------------------------------------------------------------------
-local function createVisuals(targetChar, playerObj)
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "SigmaChairV2_FOV"
+ScreenGui.ResetOnSpawn = false
+pcall(function() ScreenGui.Parent = CoreGui end)
+if not ScreenGui.Parent then ScreenGui.Parent = player:WaitForChild("PlayerGui") end
+
+-- Main Frame
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 500, 0, 350)
+MainFrame.Position = UDim2.new(0.5, -250, 0.5, -175)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+-- Header
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 50)
+Header.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+Header.BorderSizePixel = 0
+Header.Parent = MainFrame
+
+local HeaderCorner = Instance.new("UICorner")
+HeaderCorner.CornerRadius = UDim.new(0, 8)
+HeaderCorner.Parent = Header
+
+-- Titel
+local Title = Instance.new("TextLabel")
+Title.Text = "Sigma Chair V2"
+Title.Size = UDim2.new(1, -20, 1, 0)
+Title.Position = UDim2.new(0, 20, 0, 0)
+Title.BackgroundTransparency = 1
+Title.TextColor3 = Settings.ThemeColor
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 22
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Header
+
+-- Sidebar
+local Sidebar = Instance.new("Frame")
+Sidebar.Size = UDim2.new(0, 130, 1, -50)
+Sidebar.Position = UDim2.new(0, 0, 0, 50)
+Sidebar.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+Sidebar.BorderSizePixel = 0
+Sidebar.Parent = MainFrame
+
+local SidebarPadding = Instance.new("UIPadding")
+SidebarPadding.PaddingTop = UDim.new(0, 10)
+SidebarPadding.Parent = Sidebar
+
+local SidebarList = Instance.new("UIListLayout")
+SidebarList.SortOrder = Enum.SortOrder.LayoutOrder
+SidebarList.Padding = UDim.new(0, 5)
+SidebarList.Parent = Sidebar
+
+-- Content
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, -140, 1, -60)
+Content.Position = UDim2.new(0, 140, 0, 55)
+Content.BackgroundTransparency = 1
+Content.Parent = MainFrame
+
+-- Pages & Tabs Setup
+local Pages = {}
+local TabButtons = {}
+
+local function createPage(name)
+	local page = Instance.new("Frame")
+	page.Name = name .. "Page"
+	page.Size = UDim2.new(1, 0, 1, 0)
+	page.BackgroundTransparency = 1
+	page.Visible = false
+	page.Parent = Content
+	
+	local layout = Instance.new("UIListLayout")
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 10)
+	layout.Parent = page
+	
+	Pages[name] = page
+	return page
+end
+
+local AimPage = createPage("Aim")
+local VisualsPage = createPage("Visuals")
+local PlayerPage = createPage("Player")
+
+local function createTabBtn(text, targetPageName)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, -20, 0, 40)
+	btn.BackgroundTransparency = 1
+	btn.Text = text
+	btn.TextColor3 = Color3.fromRGB(150, 150, 150)
+	btn.Font = Enum.Font.GothamSemibold
+	btn.TextSize = 16
+	btn.Parent = Sidebar
+	
+	btn.MouseButton1Click:Connect(function()
+		for _, page in pairs(Pages) do page.Visible = false end
+		for _, b in pairs(TabButtons) do b.TextColor3 = Color3.fromRGB(150, 150, 150) end
+		Pages[targetPageName].Visible = true
+		btn.TextColor3 = Settings.ThemeColor
+	end)
+	table.insert(TabButtons, btn)
+end
+
+createTabBtn("Aim", "Aim")
+createTabBtn("Visuals", "Visuals")
+createTabBtn("Player", "Player")
+
+Pages["Aim"].Visible = true
+TabButtons[1].TextColor3 = Settings.ThemeColor
+
+-- === UI ELEMENTE ERSTELLER ===
+
+-- 1. Toggle Button
+local function createToggle(text, settingKey, parentPage)
+	local container = Instance.new("Frame")
+	container.Size = UDim2.new(1, 0, 0, 45)
+	container.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+	container.Parent = parentPage
+	
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = container
+	
+	local label = Instance.new("TextLabel")
+	label.Text = text
+	label.Size = UDim2.new(0.7, 0, 1, 0)
+	label.Position = UDim2.new(0.05, 0, 0, 0)
+	label.BackgroundTransparency = 1
+	label.TextColor3 = Color3.fromRGB(255, 255, 255)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 14
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = container
+	
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(0, 50, 0, 25)
+	btn.Position = UDim2.new(1, -60, 0.5, -12.5)
+	btn.Text = Settings[settingKey] and "ON" or "OFF"
+	btn.BackgroundColor3 = Settings[settingKey] and Settings.ThemeColor or Color3.fromRGB(60, 60, 60)
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 12
+	btn.Parent = container
+	
+	local btnCorner = Instance.new("UICorner")
+	btnCorner.CornerRadius = UDim.new(0, 4)
+	btnCorner.Parent = btn
+	
+	btn.MouseButton1Click:Connect(function()
+		Settings[settingKey] = not Settings[settingKey]
+		if Settings[settingKey] then
+			btn.BackgroundColor3 = Settings.ThemeColor
+			btn.Text = "ON"
+		else
+			btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+			btn.Text = "OFF"
+			
+			-- Cleanup Logic
+			if settingKey == "Visuals" then
+				for _, p in pairs(Players:GetPlayers()) do
+					if p.Character then
+						if p.Character:FindFirstChild("GlowEffect") then p.Character.GlowEffect:Destroy() end
+						if p.Character:FindFirstChild("ESP_Nametag") then p.Character.ESP_Nametag:Destroy() end
+					end
+				end
+			end
+			if settingKey == "AimLock" then isLocked = false; currentTarget = nil end
+		end
+	end)
+end
+
+-- 2. Slider (NEU!)
+local function createSlider(text, settingKey, min, max, parentPage)
+	local container = Instance.new("Frame")
+	container.Size = UDim2.new(1, 0, 0, 60) -- Etwas höher für den Slider
+	container.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+	container.Parent = parentPage
+	
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = container
+	
+	local label = Instance.new("TextLabel")
+	label.Text = text .. ": " .. Settings[settingKey]
+	label.Size = UDim2.new(1, -20, 0, 30)
+	label.Position = UDim2.new(0, 15, 0, 0)
+	label.BackgroundTransparency = 1
+	label.TextColor3 = Color3.fromRGB(255, 255, 255)
+	label.Font = Enum.Font.Gotham
+	label.TextSize = 14
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = container
+	
+	local sliderBg = Instance.new("TextButton") -- Nutzen Button für Klick-Detection
+	sliderBg.Text = ""
+	sliderBg.Size = UDim2.new(1, -30, 0, 6)
+	sliderBg.Position = UDim2.new(0, 15, 0, 40)
+	sliderBg.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	sliderBg.AutoButtonColor = false
+	sliderBg.Parent = container
+	
+	local bgCorner = Instance.new("UICorner")
+	bgCorner.CornerRadius = UDim.new(1, 0)
+	bgCorner.Parent = sliderBg
+	
+	local sliderFill = Instance.new("Frame")
+	sliderFill.Size = UDim2.new((Settings[settingKey] - min) / (max - min), 0, 1, 0)
+	sliderFill.BackgroundColor3 = Settings.ThemeColor
+	sliderFill.BorderSizePixel = 0
+	sliderFill.Parent = sliderBg
+	
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(1, 0)
+	fillCorner.Parent = sliderFill
+	
+	-- Slider Logik
+	local dragging = false
+	
+	sliderBg.MouseButton1Down:Connect(function() dragging = true end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+	end)
+	
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+			local mousePos = UserInputService:GetMouseLocation()
+			local relPos = mousePos.X - sliderBg.AbsolutePosition.X
+			local percent = math.clamp(relPos / sliderBg.AbsoluteSize.X, 0, 1)
+			
+			local value = math.floor(min + (max - min) * percent)
+			Settings[settingKey] = value
+			
+			sliderFill.Size = UDim2.new(percent, 0, 1, 0)
+			label.Text = text .. ": " .. value
+		end
+	end)
+end
+
+-- GUI INHALT ERSTELLEN
+createToggle("Aim Lock", "AimLock", AimPage)
+createToggle("Trigger Bot", "TriggerBot", AimPage)
+
+createToggle("Visuals / ESP", "Visuals", VisualsPage)
+
+createToggle("Infinite Jump", "InfJump", PlayerPage)
+createSlider("FOV Changer", "FieldOfView", 70, 120, PlayerPage) -- Hier ist der Slider
+
+-- Menü Taste
+UserInputService.InputBegan:Connect(function(input)
+	if input.KeyCode == Enum.KeyCode.RightShift then
+		MainFrame.Visible = not MainFrame.Visible
+	end
+end)
+
+-----------------------------------------------------------------------
+-- 2. VISUALS
+-----------------------------------------------------------------------
+local function updateVisuals(targetChar, playerObj)
+	if not Settings.Visuals then return end
 	if targetChar == player.Character then return end
 	
-	-- 1. Highlight
+	-- Highlight
 	if not targetChar:FindFirstChild("GlowEffect") then
 		local highlight = Instance.new("Highlight")
 		highlight.Name = "GlowEffect"
 		highlight.Adornee = targetChar
-		highlight.FillColor = Color3.fromRGB(0, 85, 255) -- Blau
+		highlight.FillColor = Settings.ThemeColor
 		highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
 		highlight.FillTransparency = 0.5
 		highlight.Parent = targetChar
 	end
 
-	-- 2. Nametag
+	-- Nametag
 	local head = targetChar:FindFirstChild("Head")
 	if head and not targetChar:FindFirstChild("ESP_Nametag") then
 		local bb = Instance.new("BillboardGui")
@@ -51,7 +333,7 @@ local function createVisuals(targetChar, playerObj)
 		txt.BackgroundTransparency = 1
 		txt.Size = UDim2.new(1, 0, 1, 0)
 		txt.TextStrokeTransparency = 0 
-		txt.TextColor3 = Color3.fromRGB(0, 170, 255) -- Hellblau
+		txt.TextColor3 = Settings.ThemeColor
 		txt.TextSize = 14
 		txt.Font = Enum.Font.SourceSansBold
 		
@@ -62,7 +344,6 @@ local function createVisuals(targetChar, playerObj)
 				txt.Text = playerObj.Name .. " [" .. hp .. "%]"
 			end
 		end
-		
 		updateText()
 		if humanoid then humanoid.HealthChanged:Connect(updateText) end
 		bb.Parent = targetChar
@@ -73,45 +354,42 @@ local function setupPlayer(otherPlayer)
 	if otherPlayer == player then return end
 	otherPlayer.CharacterAdded:Connect(function(char)
 		task.wait(0.5)
-		createVisuals(char, otherPlayer)
+		updateVisuals(char, otherPlayer)
 	end)
-	if otherPlayer.Character then createVisuals(otherPlayer.Character, otherPlayer) end
+	if otherPlayer.Character then updateVisuals(otherPlayer.Character, otherPlayer) end
 end
-
 for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
 Players.PlayerAdded:Connect(setupPlayer)
 
+RunService.RenderStepped:Connect(function()
+	if Settings.Visuals then
+		for _, p in pairs(Players:GetPlayers()) do
+			if p ~= player and p.Character then
+				if not p.Character:FindFirstChild("GlowEffect") then
+					updateVisuals(p.Character, p)
+				end
+			end
+		end
+	end
+end)
+
 -----------------------------------------------------------------------
--- TEIL 2: ECHTER MAUSKLICK (VirtualInputManager)
+-- 3. WAFFEN LOGIK
 -----------------------------------------------------------------------
 local function performClick()
-	if tick() - lastShotTime < FIRE_RATE then return end
+	if tick() - lastShotTime < Settings.FireRate then return end
 	lastShotTime = tick()
 	
-	-- Prüfen ob Tool ausgerüstet ist
 	local char = player.Character
 	if char and char:FindFirstChildWhichIsA("Tool") then
-		
-		local x, y = 0, 0 -- Koordinaten sind egal bei Button1
-		
-		-- 1. Maustaste DRÜCKEN
-		VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
-		
-		-- 2. Ganz kurz warten (Wichtig für manche Waffen)
+		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
 		task.wait(0.05)
-		
-		-- 3. Maustaste LOSLASSEN
-		VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
-		
-		-- Das sorgt dafür, dass die Waffe im Spiel wirklich feuert
+		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
 	end
 end
 
------------------------------------------------------------------------
--- TEIL 3: TRIGGERBOT LOGIK
------------------------------------------------------------------------
 local function checkTriggerBot()
-	if not TRIGGER_ENABLED then return end
+	if not Settings.TriggerBot then return end
 	
 	local mouseLocation = UserInputService:GetMouseLocation()
 	local ray = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
@@ -124,40 +402,34 @@ local function checkTriggerBot()
 	
 	if result and result.Instance then
 		local hitPart = result.Instance
-		
-		-- Teil gehört zu einem Charakter?
 		local character = hitPart.Parent
 		if character:IsA("Accessory") then character = character.Parent end 
 		
 		local humanoid = character:FindFirstChild("Humanoid")
-		
 		if humanoid and humanoid.Health > 0 then
 			local enemyPlayer = Players:GetPlayerFromCharacter(character)
-			
-			if USE_TEAM_CHECK and enemyPlayer and enemyPlayer.Team == player.Team then return end
-			
-			-- Echter Klick ausführen
+			if Settings.TeamCheck and enemyPlayer and enemyPlayer.Team == player.Team then return end
 			performClick()
 		end
 	end
 end
 
 -----------------------------------------------------------------------
--- TEIL 4: AIM LOCK (Mouse Closest)
+-- 4. AIM LOCK
 -----------------------------------------------------------------------
 local function getTargetUnderMouse()
 	local closestTarget = nil
-	local shortestDistance = FOV_LIMIT
+	local shortestDistance = Settings.FOV
 	local mousePos = UserInputService:GetMouseLocation()
 
 	for _, otherPlayer in ipairs(Players:GetPlayers()) do
 		if otherPlayer ~= player and otherPlayer.Character then
 			local char = otherPlayer.Character
 			local humanoid = char:FindFirstChild("Humanoid")
-			local targetPartObj = char:FindFirstChild(AIM_PART)
+			local targetPartObj = char:FindFirstChild(Settings.AimPart)
 
 			if humanoid and humanoid.Health > 0 and targetPartObj then
-				if USE_TEAM_CHECK and otherPlayer.Team == player.Team then continue end
+				if Settings.TeamCheck and otherPlayer.Team == player.Team then continue end
 
 				local screenPos, onScreen = camera:WorldToViewportPoint(targetPartObj.Position)
 
@@ -176,7 +448,9 @@ end
 
 UserInputService.InputBegan:Connect(function(input, gp)
 	if gp then return end
-	if input.UserInputType == LOCK_KEY then
+	if not Settings.AimLock then return end
+	
+	if input.UserInputType == Settings.LockKey then
 		local found = getTargetUnderMouse()
 		if found then
 			currentTarget = found
@@ -186,27 +460,29 @@ UserInputService.InputBegan:Connect(function(input, gp)
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == LOCK_KEY then
+	if input.UserInputType == Settings.LockKey then
 		isLocked = false
 		currentTarget = nil
 	end
 end)
 
 -----------------------------------------------------------------------
--- TEIL 5: INFINITE JUMP
+-- 5. INFINITE JUMP
 -----------------------------------------------------------------------
 UserInputService.JumpRequest:Connect(function()
-	if player.Character and player.Character:FindFirstChild("Humanoid") then
-		player.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	if Settings.InfJump then
+		if player.Character and player.Character:FindFirstChild("Humanoid") then
+			player.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
 	end
 end)
 
 -----------------------------------------------------------------------
--- MAIN LOOP
+-- 6. MAIN LOOP
 -----------------------------------------------------------------------
 RunService.RenderStepped:Connect(function()
-	-- 1. Aimlock
-	if isLocked and currentTarget and currentTarget.Parent then
+	-- Aimlock
+	if Settings.AimLock and isLocked and currentTarget and currentTarget.Parent then
 		local humanoid = currentTarget.Parent:FindFirstChild("Humanoid")
 		if humanoid and humanoid.Health > 0 then
 			camera.CFrame = CFrame.new(camera.CFrame.Position, currentTarget.Position)
@@ -216,6 +492,9 @@ RunService.RenderStepped:Connect(function()
 		end
 	end
 	
-	-- 2. Triggerbot
+	-- Triggerbot
 	checkTriggerBot()
+	
+	-- FOV Changer (NEU)
+	camera.FieldOfView = Settings.FieldOfView
 end)
