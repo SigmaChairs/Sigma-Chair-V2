@@ -1,0 +1,184 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- === EINSTELLUNGEN ===
+local LOCK_KEY = Enum.UserInputType.MouseButton2 -- Taste für Aimlock
+local AIM_PART = "Head" -- Worauf gezielt wird
+local MAX_DISTANCE = 500 
+local USE_TEAM_CHECK = false
+local FIRE_RATE = 0.1 -- Wie schnell der Triggerbot schießt (0.1s)
+local TRIGGER_ENABLED = true -- Triggerbot an/aus
+
+-- Variablen
+local isLocked = false
+local currentTarget = nil
+local lastShotTime = 0
+
+-----------------------------------------------------------------------
+-- TEIL 1: HIGHLIGHTS
+-----------------------------------------------------------------------
+local function createHighlight(targetChar)
+	if targetChar == player.Character then return end
+	if targetChar:FindFirstChild("GlowEffect") then return end
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "GlowEffect"
+	highlight.Adornee = targetChar
+	highlight.FillColor = Color3.fromRGB(255, 0, 0)
+	highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+	highlight.FillTransparency = 0.6
+	highlight.OutlineTransparency = 0.1
+	highlight.Parent = targetChar
+end
+
+local function setupPlayer(otherPlayer)
+	if otherPlayer == player then return end
+	otherPlayer.CharacterAdded:Connect(function(char)
+		task.wait(0.5)
+		createHighlight(char)
+	end)
+	if otherPlayer.Character then createHighlight(otherPlayer.Character) end
+end
+
+for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
+Players.PlayerAdded:Connect(setupPlayer)
+
+-----------------------------------------------------------------------
+-- TEIL 2: WAFFEN LOGIK (Schießen)
+-----------------------------------------------------------------------
+local function fireWeapon(targetPos)
+	if tick() - lastShotTime < FIRE_RATE then return end
+	lastShotTime = tick()
+	
+	local char = player.Character
+	local tool = char and char:FindFirstChildWhichIsA("Tool")
+	
+	if tool then
+		-- Startpunkt (Handle oder Kopf)
+		local origin = (tool:FindFirstChild("Handle") and tool.Handle.Position) or char.Head.Position
+		
+		-- Laserstrahl erstellen
+		local beam = Instance.new("Part")
+		beam.Anchored = true
+		beam.CanCollide = false
+		beam.Material = Enum.Material.Neon
+		beam.Color = Color3.fromRGB(255, 255, 0) -- Gelb
+		beam.Size = Vector3.new(0.1, 0.1, (targetPos - origin).Magnitude)
+		beam.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -beam.Size.Z/2)
+		beam.Parent = workspace
+		game:GetService("Debris"):AddItem(beam, 0.05)
+		
+		-- HIER: RemoteEvent für Schaden feuern
+		-- tool.RemoteEvent:FireServer(targetPos)
+		print("TRIGGERBOT: Treffer!")
+	end
+end
+
+-----------------------------------------------------------------------
+-- TEIL 3: TRIGGERBOT LOGIK (Maus-Erkennung)
+-----------------------------------------------------------------------
+local function checkTriggerBot()
+	if not TRIGGER_ENABLED then return end
+	
+	-- Raycast von der Kamera durch die Mausposition
+	local mouseLocation = UserInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
+	
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {player.Character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	
+	local result = workspace:Raycast(ray.Origin, ray.Direction * MAX_DISTANCE, params)
+	
+	if result and result.Instance then
+		local hitPart = result.Instance
+		
+		-- Ist es ein Kopf?
+		if hitPart.Name == "Head" and hitPart.Parent:FindFirstChild("Humanoid") then
+			local enemyPlayer = Players:GetPlayerFromCharacter(hitPart.Parent)
+			local hum = hitPart.Parent.Humanoid
+			
+			if hum.Health > 0 then
+				-- Team Check
+				if USE_TEAM_CHECK and enemyPlayer and enemyPlayer.Team == player.Team then
+					return -- Nicht schießen
+				end
+				
+				-- FEUER!
+				fireWeapon(hitPart.Position)
+			end
+		end
+	end
+end
+
+-----------------------------------------------------------------------
+-- TEIL 4: AIM LOCK MECHANIK
+-----------------------------------------------------------------------
+local function getClosestTarget()
+	local closestTarget = nil
+	local shortestDist = MAX_DISTANCE
+	local myPos = player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character.HumanoidRootPart.Position
+
+	if not myPos then return nil end
+
+	for _, otherPlayer in ipairs(Players:GetPlayers()) do
+		if otherPlayer ~= player and otherPlayer.Character then
+			local char = otherPlayer.Character
+			local humanoid = char:FindFirstChild("Humanoid")
+			local targetPartObj = char:FindFirstChild(AIM_PART)
+
+			if humanoid and humanoid.Health > 0 and targetPartObj then
+				if USE_TEAM_CHECK and otherPlayer.Team == player.Team then continue end
+
+				local dist = (targetPartObj.Position - myPos).Magnitude
+				if dist < shortestDist then
+					closestTarget = targetPartObj
+					shortestDist = dist
+				end
+			end
+		end
+	end
+	return closestTarget
+end
+
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.UserInputType == LOCK_KEY then
+		local found = getClosestTarget()
+		if found then
+			currentTarget = found
+			isLocked = true
+		end
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == LOCK_KEY then
+		isLocked = false
+		currentTarget = nil
+	end
+end)
+
+-----------------------------------------------------------------------
+-- MAIN LOOP
+-----------------------------------------------------------------------
+RunService.RenderStepped:Connect(function()
+	-- 1. Aimlock (Kamera bewegen)
+	if isLocked and currentTarget and currentTarget.Parent then
+		local humanoid = currentTarget.Parent:FindFirstChild("Humanoid")
+		if humanoid and humanoid.Health > 0 then
+			camera.CFrame = CFrame.new(camera.CFrame.Position, currentTarget.Position)
+		else
+			isLocked = false
+			currentTarget = nil
+		end
+	end
+	
+	-- 2. Triggerbot (Prüfen ob Maus auf Kopf ist)
+	-- Läuft immer, auch wenn Aimlock aus ist!
+	checkTriggerBot()
+end)
